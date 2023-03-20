@@ -28,7 +28,6 @@ from tensorflow.keras.layers import (
     Reshape,
 )
 from tensorflow.keras import regularizers
-
 from tensorflow.keras.models import Model
 
 from tensorflow import keras
@@ -41,14 +40,23 @@ from sklearn.metrics import f1_score, precision_score, recall_score, confusion_m
 print("Tensorflow version " + tf.__version__)
 AUTO = tf.data.experimental.AUTOTUNE
 
-
 IMAGE_SIZE = (256, 256) 
 IMG_CHANNELS = 3
-BATCH_SIZE = 32 
-EPOCHS = 60
+BATCH_SIZE = 64 
+EPOCHS = 400
+
+# Preprocessing parameters
+RESCALE = 1.0 / 255
+SHAPE = IMAGE_SIZE
+PREPROCESSING_FUNCTION = None
+PREPROCESSING = None
+VMIN = 0.0
+VMAX = 1.0
+DYNAMIC_RANGE = VMAX - VMIN
 
 # numpy and matplotlib defaults
 np.set_printoptions(threshold=15, linewidth=80)
+
 
 def batch_to_numpy_images_and_labels(data):
     images, labels = data
@@ -58,7 +66,8 @@ def batch_to_numpy_images_and_labels(data):
         return images, labels
     numpy_images = images.numpy()
     numpy_labels = labels.numpy()
-    if numpy_labels.dtype == object: # binary string in this case, these are image ID strings
+    # binary string in this case, these are image ID strings
+    if numpy_labels.dtype == object: 
         numpy_labels = [None for _ in enumerate(numpy_images)]
     # If no labels, only image IDs, return None for labels (this is the case for test data)
     return numpy_images, numpy_labels
@@ -68,7 +77,8 @@ def title_from_label_and_target(label, correct_label):
     if correct_label is None:
         return CLASSES[label], True
     correct = (label == correct_label)
-    return "{} [{}{}{}]".format(CLASSES[label], 'OK' if correct else 'NO', u"\u2192" if not correct else '',
+    return "{} [{}{}{}]".format(CLASSES[label], 'OK' if correct else 'NO', 
+                                u"\u2192" if not correct else '',
                                 CLASSES[correct_label] if not correct else ''), correct
 
 def display_one_img(image, title, subplot, red=False, titlesize=16):
@@ -77,9 +87,11 @@ def display_one_img(image, title, subplot, red=False, titlesize=16):
     plt.axis('off')
     plt.imshow(image)
     if len(title) > 0:
-        plt.title(title, fontsize=int(titlesize) if not red else int(titlesize/1.2), color='red' if red else 'black', fontdict={'verticalalignment':'center'}, pad=int(titlesize/1.5))
+        plt.title(title, fontsize=int(titlesize) if not red else int(titlesize/1.2), 
+                  color='red' if red else 'black', fontdict={'verticalalignment':'center'}, 
+                  pad=int(titlesize/1.5))
     return (subplot[0], subplot[1], subplot[2]+1)
-    
+
 
 def display_batch_of_images(databatch, predictions=None, precision=None):
     """Function works with:
@@ -129,7 +141,7 @@ def display_batch_of_images(databatch, predictions=None, precision=None):
     plt.show()
 
 
-def display_side_by_side(images1, images2):
+def display_side_by_side(images1, images2, labels, save=False):
     # Compute the number of rows for the subplots
     num_images = len(images1)
     num_cols = 2
@@ -141,16 +153,20 @@ def display_side_by_side(images1, images2):
     for i in range(num_images):
         row = i 
         axes[row, 0].imshow(images1[i])
-        axes[row, 0].set_title("Input " + str(i + 1) )
+        axes[row, 0].set_title(f'{CLASSES[int(labels[i])]}')
         axes[row, 0].axis("off")
         axes[row, 0].set_adjustable("box")
         
         axes[row, 1 ].imshow(images2[i])
-        axes[row, 1 ].set_title("Reconstructed " + str(i + 1) )
+        axes[row, 1 ].set_title(f'MSE: {mse(images1[i], images2[i]):.3f}, SSIM: {SSIMLoss(images1[i], images2[i]).numpy():.3f}')
         axes[row, 1 ].axis("off")
-        axes[row, 1 ].set_adjustable("box")   
+        axes[row, 1 ].set_adjustable("box") 
+        #row.set_title(' title', fontweight='semibold')
 
     # Show the figure
+    fig.suptitle('Input : Reconstructed')
+    if save:
+        plt.savefig('result.png')
     plt.show()
     
     
@@ -249,7 +265,7 @@ train_dataset = datagen.flow_from_directory("data/processed/Processed1_autoencod
                                        class_mode='input', 
                                        color_mode="rgb",
                                        target_size=IMAGE_SIZE,
-                                       batch_size=32,
+                                       batch_size=BATCH_SIZE,
                                        shuffle=True)
 # load and iterate validation dataset
 validation_dataset = datagen.flow_from_directory("data/processed/Processed1_autoencoder/val", 
@@ -257,7 +273,7 @@ validation_dataset = datagen.flow_from_directory("data/processed/Processed1_auto
                                        color_mode="rgb",
                                        target_size=IMAGE_SIZE,
                                        # batch_size=opts['batch_size']
-                                       batch_size=32,
+                                       batch_size=BATCH_SIZE,
                                        shuffle=True)
 # load and iterate test dataset
 test_datagen = ImageDataGenerator(rescale= 1 / 255.0)
@@ -280,15 +296,6 @@ CLASSES = list (class_names_test.keys())
 
 
 
-# Preprocessing parameters
-RESCALE = 1.0 / 255
-SHAPE = IMAGE_SIZE
-PREPROCESSING_FUNCTION = None
-PREPROCESSING = None
-VMIN = 0.0
-VMAX = 1.0
-DYNAMIC_RANGE = VMAX - VMIN
-
 
 def build_model(color_mode):
     # set channels
@@ -302,7 +309,7 @@ def build_model(color_mode):
     input_img = Input(shape=img_dim)
 
     # encoder
-    encoding_dim = 64  # 128
+    encoding_dim = 256  # 64
     x = Conv2D(32, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(
         input_img
     )
@@ -311,7 +318,7 @@ def build_model(color_mode):
     x = MaxPooling2D((2, 2), padding="same")(x)
 
     # added ---------------------------------------------------------------------------
-    x = Conv2D(32, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = Conv2D(64, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
     x = BatchNormalization()(x)
     x = LeakyReLU(alpha=0.1)(x)
     x = MaxPooling2D((2, 2), padding="same")(x)
@@ -323,7 +330,7 @@ def build_model(color_mode):
     x = MaxPooling2D((2, 2), padding="same")(x)
 
     # added ---------------------------------------------------------------------------
-    x = Conv2D(64, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = Conv2D(128, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
     x = BatchNormalization()(x)
     x = LeakyReLU(alpha=0.1)(x)
     x = MaxPooling2D((2, 2), padding="same")(x)
@@ -335,7 +342,7 @@ def build_model(color_mode):
     x = MaxPooling2D((2, 2), padding="same")(x)
 
     # added ---------------------------------------------------------------------------
-    x = Conv2D(128, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = Conv2D(256, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
     x = BatchNormalization()(x)
     x = LeakyReLU(alpha=0.1)(x)
     x = MaxPooling2D((2, 2), padding="same")(x)
@@ -348,7 +355,7 @@ def build_model(color_mode):
 
     # decoder
     x = Reshape((4, 4, encoding_dim // 16))(x)
-    x = Conv2D(128, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = Conv2D(256, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
     x = BatchNormalization()(x)
     x = LeakyReLU(alpha=0.1)(x)
     x = UpSampling2D((2, 2))(x)
@@ -360,7 +367,7 @@ def build_model(color_mode):
     x = UpSampling2D((2, 2))(x)
     # ---------------------------------------------------------------------------------
 
-    x = Conv2D(64, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = Conv2D(128, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
     x = BatchNormalization()(x)
     x = LeakyReLU(alpha=0.1)(x)
     x = UpSampling2D((2, 2))(x)
@@ -372,7 +379,7 @@ def build_model(color_mode):
     x = UpSampling2D((2, 2))(x)
     # ---------------------------------------------------------------------------------
 
-    x = Conv2D(32, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = Conv2D(64, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
     x = BatchNormalization()(x)
     x = LeakyReLU(alpha=0.1)(x)
     x = UpSampling2D((2, 2))(x)
@@ -397,29 +404,65 @@ def build_model(color_mode):
 
 
 
-
 autoencoder = build_model('rgb')
 # how many layers are in the model
 print("Number of layers in the model: ", len(autoencoder.layers))
 # print(len(autoencoder.trainable_variables))
 # autoencoder.summary()
 
+
+import scipy.ndimage as nd
+import scipy.ndimage.filters as filters
+from keras import losses
+import tensorflow as tf
+# https://github.com/ilopezfr/image-superres/blob/master/Image_Super_Resolution_using_Autoencoders.ipynb
+
+def hfenn_loss(ori, res):
+    '''
+    HFENN-based loss
+    ori, res - batched images with 3 channels
+    See metrics.hfenn
+    '''
+    fnorm = 0.325 # norm of l_o_g operator, estimated numerically
+    sigma = 1.5 # parameter from HFEN metric
+    truncate = 4 # default parameter from filters.gaussian_laplace
+    wradius = int(truncate * sigma + 0.5)
+    eye = np.zeros((2*wradius+1, 2*wradius+1), dtype=np.float32)
+    eye[wradius, wradius] = 1.
+    ker_mat = filters.gaussian_laplace(eye, sigma)
+    with tf.name_scope('hfenn_loss'):
+        chan = 3
+        ker = tf.constant(np.tile(ker_mat[:, :, None, None], (1, 1, chan, 1)))
+        filtered = tf.nn.depthwise_conv2d(ori - res, ker, [1, 1, 1, 1], 'VALID')
+        loss = tf.reduce_mean(tf.square(filtered))
+        loss = loss / (fnorm**2)
+    return loss
+  
+
+def ae_loss(input_img, decoder):
+    mse = losses.mean_squared_error(input_img, decoder) # MSE
+    weight = 10.0 # weight
+    return mse + weight * hfenn_loss(input_img, decoder) # MSE + weight * HFENN
+
+
+
 LR = 0.0001
 autoencoder.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=LR),
-              loss='mse')
+              loss=ae_loss,
+              run_eagerly=True)
 
 
 autoencoder.summary()
 
 
-initial_epochs = 70
+
 
 loss0 = autoencoder.evaluate(validation_dataset)
 print("initial loss: {:.2f}".format(loss0))
 
 
 history = autoencoder.fit(train_dataset,
-                    epochs=initial_epochs,
+                    epochs=EPOCHS,
                     validation_data=validation_dataset)
 
 
@@ -431,7 +474,7 @@ plt.figure(figsize=(8, 8))
 plt.plot(loss, label='Training Loss')
 plt.plot(val_loss, label='Validation Loss')
 plt.legend(loc='upper right')
-plt.ylabel('Cross Entropy')
+plt.ylabel('MSE')
 #plt.ylim([0,1.0])
 plt.title('Training and Validation Loss')
 plt.xlabel('epoch')
@@ -440,6 +483,8 @@ plt.show()
 
 
 """ ANOMALY DETECTION """
+
+
 
 # 1. Reconstruct the data using our trainined autoencoder model.
 x_test_recon = autoencoder.predict(test_dataset)
@@ -473,24 +518,103 @@ test_img = np.array(test_img)
 test_label = np.array(test_label)
 # the reconstruction score is the mean of the reconstruction errors (relatively high scores are anomalous)
 mse_test = [mse(test_img[i],x_test_recon[i])  for i in range(test_images)]
+SSIM_test = [SSIMLoss(test_img[i],x_test_recon[i])  for i in range(test_images)]
 
 # store the reconstruction data in a Pandas dataframe
-anomaly_data = pd.DataFrame({'recon_score':mse_test})
+anomaly_data = pd.DataFrame({'recon_score_mse':mse_test,
+                             'recon_score_ssim':[x.numpy() for x in SSIM_test],
+                             'label':test_label.astype(int)})
 
 # if our reconstruction scores our normally distributed we can use their statistics
 anomaly_data.describe()
 
 # plotting the density will give us an idea of how the reconstruction scores are distributed
 plt.xlabel('Reconstruction Score')
-anomaly_data['recon_score'].plot.hist(bins=200, range=[.05, .9])
+anomaly_data['recon_score_mse'].plot.hist(bins=200, range=[.05, .9])
+
+labels = anomaly_data.label.unique()
+plt.hist([anomaly_data.loc[anomaly_data.label == x, 'recon_score_mse'] for x in labels], label=labels)
+plt.title('recon_score_mse')
+plt.legend(CLASSES)
+#plt.show()
+
+plt.hist([anomaly_data.loc[anomaly_data.label == x, 'recon_score_ssim'] for x in labels], label=labels)
+plt.title('recon_score_ssim')
+plt.legend(CLASSES)
+plt.show()
+
+
+anomaly_data.groupby(by='label').describe()
+
+
+from sklearn.metrics import roc_curve, auc, confusion_matrix
+fpr, tpr, thresholds = roc_curve(test_label.astype(int), mse_test)
+roc_auc = auc(fpr, tpr)
+
+plt.figure(figsize=(10,10))
+plt.plot(fpr, tpr, lw=1, label='ROC curve (area = %0.2f)' % roc_auc)
+plt.plot([0, 1], [0, 1], color='lime', linestyle='--')
+plt.xlim([0.0, 1.0])
+plt.ylim([0.0, 1.05])
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('Receiver operating characteristic')
+plt.legend(loc="lower right")
+plt.show()
 
 
 
+# There are number of ways to set thresholds. We give some examples below and we encourage you to experiment by setting your own thresholds and see how they affect the model.
+# We can pick the threshold based on maximizing the true positive rate (tpr) 
+# and minimizing the false positive rate (fpr)
+optimal_threshold_idx = np.argmax(tpr - fpr)
+optimal_threshold = thresholds[optimal_threshold_idx]
+print(optimal_threshold)
+
+# Or we assume our reconstructions are normally distributed and label anomalies as those
+# that are a number of standard deviations away from the mean
+recon_mean = np.mean(mse_test)
+recon_stddev = np.std(mse_test)
+
+stats_threshold = recon_mean + 5*recon_stddev
+print(stats_threshold)
+
+
+thresh = optimal_threshold
+#thresh = stats_threshold
 
 
 
+print(thresh)
+
+pred_labels = (mse_test > thresh).astype(int)
+
+results = confusion_matrix(test_label.astype(int), pred_labels) 
 
 
+print ('Confusion Matrix: ')
+
+def plot_confusion_matrix(cm, target_names, title='Confusion Matrix', cmap=plt.cm.Greens):
+    plt.imshow(cm, interpolation='nearest', cmap=cmap)
+    plt.title(title)
+    plt.colorbar()
+    tick_marks = np.arange(len(target_names))
+    plt.xticks(tick_marks, target_names, rotation=45)
+    plt.yticks(tick_marks, target_names)
+    plt.tight_layout()
+
+    width, height = cm.shape
+
+    for x in range(width):
+        for y in range(height):
+            plt.annotate(str(cm[x][y]), xy=(y, x), 
+                        horizontalalignment='center',
+                        verticalalignment='center')
+    plt.ylabel('True Label')
+    plt.xlabel('Predicted Label')
+
+
+plot_confusion_matrix(results, ['Normal','Anomaly'])
 
 
 
@@ -501,26 +625,163 @@ def presision(predictions, probabilities):
     return 1 - np.abs(pre - pro)
     
 
-image_batch, label_batch = train_dataset.next()
-probabilities = autoencoder.predict_on_batch(image_batch).flatten()
-probabilities = tf.nn.sigmoid(probabilities)
-predictions = tf.where(probabilities < 0.5, 0, 1)
-display_batch_of_images((image_batch/255, label_batch.astype(int)), predictions.numpy())
 
 
 
 ### test images
 image_batch, label_batch = test_dataset.next()
-probabilities = autoencoder.predict_on_batch(image_batch).flatten()
-# Apply a sigmoid since our model returns logits
-probabilities = tf.nn.sigmoid(probabilities)
-predictions = tf.where(probabilities < 0.5, 0, 1)
-precision = presision(predictions,probabilities)
-display_batch_of_images((image_batch/255, label_batch.astype(int)), predictions, precision)
+prediction = autoencoder.predict_on_batch(image_batch)
+display_side_by_side(image_batch[:5], prediction[:5],label_batch[:5])
 
 
-loss, accuracy = model.evaluate(test_dataset)
-print('Test accuracy :', accuracy)
+"""
+def build_model(color_mode):
+    # set channels
+    if color_mode == "grayscale":
+        channels = 1
+    elif color_mode == "rgb":
+        channels = 3
+    img_dim = (*SHAPE, channels)
+
+    # input
+    input_img = Input(shape=img_dim)
+
+    # encoder
+    encoding_dim = 256  # 64
+    x = Conv2D(64, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(
+        input_img
+    )
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = Conv2D(64, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = MaxPooling2D((2, 2), padding="same")(x)
+
+    # added ---------------------------------------------------------------------------
+    x = Conv2D(64, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = Conv2D(64, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = MaxPooling2D((2, 2), padding="same")(x)
+    # ---------------------------------------------------------------------------------
+
+    x = Conv2D(128, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = Conv2D(128, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = MaxPooling2D((2, 2), padding="same")(x)
+
+    # added ---------------------------------------------------------------------------
+    x = Conv2D(128, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = Conv2D(128, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = MaxPooling2D((2, 2), padding="same")(x)
+    # ---------------------------------------------------------------------------------
+
+    x = Conv2D(256, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = Conv2D(256, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = MaxPooling2D((2, 2), padding="same")(x)
+
+    # added ---------------------------------------------------------------------------
+    x = Conv2D(512, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = Conv2D(512, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = Conv2D(512, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = MaxPooling2D((2, 2), padding="same")(x)
+    # ---------------------------------------------------------------------------------
+
+    x = Flatten()(x)
+    x = Dense(encoding_dim, kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    # encoded = x
+
+    # decoder
+    x = Reshape((4, 4, encoding_dim // 16))(x)
+    x = Conv2D(512, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = Conv2D(512, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = Conv2D(512, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = UpSampling2D((2, 2))(x)
+
+    ## added ---------------------------------------------------------------------------
+    x = Conv2D(256, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = Conv2D(256, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = UpSampling2D((2, 2))(x)
+    # ---------------------------------------------------------------------------------
+
+    x = Conv2D(128, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = Conv2D(128, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = UpSampling2D((2, 2))(x)
+
+    ## added ---------------------------------------------------------------------------
+    x = Conv2D(128, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = Conv2D(128, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = UpSampling2D((2, 2))(x)
+    # ---------------------------------------------------------------------------------
+
+    x = Conv2D(64, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = Conv2D(64, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = UpSampling2D((2, 2))(x)
+
+    ## added ---------------------------------------------------------------------------
+    x = Conv2D(64, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = Conv2D(64, (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6))(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU(alpha=0.1)(x)
+    x = UpSampling2D((2, 2))(x)
+    # ---------------------------------------------------------------------------------
+
+    x = Conv2D(
+        img_dim[2], (3, 3), padding="same", kernel_regularizer=regularizers.l2(1e-6)
+    )(x)
+    x = BatchNormalization()(x)
+    x = Activation("sigmoid")(x)
+    decoded = x
+    # model
+    autoencoder = Model(input_img, decoded)
+    return autoencoder
+
+"""
 
 
 
