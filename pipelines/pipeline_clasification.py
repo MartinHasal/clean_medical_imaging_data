@@ -39,6 +39,7 @@ import tensorflow as tf
 import os, shutil
 import argparse
 #import hypertune
+
   
 
 from utils.util import cleanup_dir, create_strategy
@@ -148,7 +149,9 @@ def train_and_evaluate(opts, strategy=None):
                         validation_data=validation_dataset,
                         epochs=opts['num_epochs'],
                         steps_per_epoch=num_steps_per_epoch,
-                        callbacks=[early_stopping_cb, reduce_lr]
+                        callbacks=[early_stopping_cb,
+                                   reduce_lr,
+                                   model_checkpoint_cb]
                         )
 
     training_plot(['loss', 'binary_accuracy'], history,
@@ -202,6 +205,42 @@ def train_and_evaluate(opts, strategy=None):
     results = confusion_matrix(test_label.astype(int), test_prob_label)
     plot_confusion_matrix(results, CLASSES)
 
+    def find_misclassified_img(y_true, y_pred):
+        different_positions_FN = []
+        different_positions_FP = []
+        for i in range(len(y_true)):
+            if y_true[i] != y_pred[i]:
+                if y_true[i] == 0:
+                    different_positions_FP.append(i)
+                else:
+                    different_positions_FN.append(i)
+        return different_positions_FN, different_positions_FP
+
+    diff_pos_FN, diff_pos_FP = find_misclassified_img(test_label.astype(int),
+                                                      test_prob_label.numpy()
+                                                      )
+    misclassified_indx = [*diff_pos_FN, *diff_pos_FP]
+
+    if len(misclassified_indx) > 32:
+        print('Number of misclassified images is higher than showed 32 images')
+        misclassified_indx = misclassified_indx[:32]
+    # labels are lists in list
+    # e.g. [[0], [0], [0], [0], [1], [1], [1], [1], [1], [1], [1], [1]]
+    misclassified_labels = test_prob_label.numpy()[misclassified_indx]
+    misclassified_labels = np.hstack(test_prob_label.numpy()[misclassified_indx])
+
+    precision = presision(tf.gather(test_prob_label,
+                                    indices=misclassified_indx),
+                          tf.gather(test_prob,
+                                          indices=misclassified_indx)
+                          )
+
+    display_batch_of_images(((test_img[misclassified_indx])/255,
+                             test_label[misclassified_indx].astype(int)),
+                            CLASSES,
+                            misclassified_labels,
+                            precision)
+
     # export the model -- will be written
 # =============================================================================
 #     export_model(model,
@@ -235,7 +274,7 @@ if __name__ == '__main__':
                         )
     parser.add_argument(
         '--num_epochs', help='How many times to iterate over training patterns',
-        default=3, type=int)
+        default=8, type=int)
     parser.add_argument(
         '--distribute', default='gpus_one_machine',
         help="""
