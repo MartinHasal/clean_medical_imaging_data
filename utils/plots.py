@@ -29,7 +29,7 @@ def training_plot(metrics, history, filename):
 
 def batch_to_numpy_images_and_labels(data):
     images, labels = data
-    # print('Zde ',labels  )
+    print('Zde ',labels  )
     if type(labels) == np.ndarray:
         # print(labels)
         return images, labels
@@ -47,6 +47,8 @@ def title_from_label_and_target(label, correct_label, CLASSES):
     # print(label, correct_label)
     if correct_label is None:
         return CLASSES[label], True
+    if type(label) == np.ndarray:
+        label = label.tolist()
     correct = (label == correct_label)
     return "{} [{}{}{}]".format(CLASSES[label], 'OK' if correct else 'NO', u"\u2192" if not correct else '',
                                 CLASSES[correct_label] if not correct else ''), correct
